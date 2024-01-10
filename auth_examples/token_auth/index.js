@@ -5,7 +5,6 @@ const dotenv = require('dotenv');
 const port = 3000;
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const fs  = require('fs');
 
 
 dotenv.config();
@@ -26,41 +25,40 @@ app.get('/create-user', (req, res) => {
     return res.sendFile(path.join(__dirname + '/create-user.html'));
 });
 
-app.get('/', verifyToken, (req, res) => {
-    res.json({
-        username: req.user,
-        exp: req.exp,
-        logout: 'http://localhost:3000/logout'
-    });
+app.get('/', verifyToken, async (req, res) => {
+    console.log(req.user)
+    if (req.user) {
+        res.json({
+            username: req.user,
+            exp: req.exp,
+            logout: 'http://localhost:3000/logout'
+        });
+    }
 })
 
-app.get('/logout', (req, res) => {
-    res.redirect('/');
-});
-
 app.post('/api/login', async (req, res) => {
-    const { username, password } = req.body;
-
-    try {
-        const response = await axios.post(`${process.env.API_URL}oauth/token`, {
-            grant_type: GrantTypes.PASSWORD_REALM,
-            audience: process.env.AUDIENCE_URL,
-            client_id: process.env.CLIENT_ID,
-            client_secret: process.env.CLIENT_SECRET,
-            scope: 'offline_access',
-            realm: 'Username-Password-Authentication',
-            username: username,
-            password: password,
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-        });
-        res.status(201).json({ access_token: response.data.access_token, refresh_token: response.data.refresh_token, username: username });
-    } catch (error) {
-        console.log(error)
-        res.status(401).json({ error: error.response.data });
+    const { code } = req.body;
+    console.log(code);
+    if (code) {
+        try {
+            const response = await axios.post(`${process.env.API_URL}oauth/token`, {
+                grant_type: GrantTypes.AUTHORIZATION_CODE,
+                audience: process.env.AUDIENCE_URL,
+                client_id: process.env.CLIENT_ID,
+                client_secret: process.env.CLIENT_SECRET,
+                code: code,
+                redirect_uri: 'http://localhost:3000/'
+            }, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+            })
+            res.json({ access_token: response.data.access_token, refresh_token: response.data.refresh_token });
+        }
+        catch (error) {
+            res.status(401).json({ error: error });
+        }
     }
 });
 
@@ -114,7 +112,7 @@ app.post('/api/refresh', async (req, res) => {
                 'Accept': 'application/json'
             }
         });
-        res.json({ access_token: response.data.access_token});
+        res.json({ access_token: response.data.access_token, refresh_token: response.data.refresh_token });
     } catch (error) {
         res.status(401).json({ error: error.response.data });
 
@@ -131,30 +129,20 @@ async function verifyToken(req, res, next) {
         return res.sendFile(path.join(__dirname + '/index.html'));
     }
 
-    try {
-        const privateKey = fs.readFileSync('private_key.pem', 'utf8');
-        jwt.verify(token, privateKey, { algorithms: ['RS256'] }, async (err, decoded) => {
-            console.log(err);
-            console.log(decoded);
-            if (err) {
-                return res.sendFile(path.join(__dirname + '/index.html'));
-            }
+    decoded = jwt.decode(token);
 
-            const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
-            if (decoded.exp > currentTimestampInSeconds) {
-                const response = await axios.get(`${process.env.AUDIENCE_URL}users/${decoded.sub}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-                req.user = response.data.name;
-                req.exp = decoded.exp;
+    if (!decoded) {
+        return res.sendFile(path.join(__dirname + '/index.html'));
+    }
+    const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
+    if (decoded.exp > currentTimestampInSeconds) {
+        const response = await axios.get(`${process.env.AUDIENCE_URL}users/${decoded.sub}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
             }
-            next();
         });
-    } catch (error) {
-        console.error('Error reading private key file:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        req.user = response.data.name;
+        req.exp = decoded.exp;
     }
     next();
 }
